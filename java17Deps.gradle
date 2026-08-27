@@ -1,0 +1,39 @@
+ext.buildRoot = layout.projectDirectory.dir('build-j17')
+ext.libsDir = buildRoot.dir('libs')
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(17)
+  }
+}
+
+sourceSets {
+  main {
+    java {
+      srcDirs = ['src/main/java', 'src/main-j17/java']
+      destinationDirectory = buildRoot.dir('classes')
+    }
+    output.resourcesDir = buildRoot.dir('classes')
+  }
+  test {
+    java {
+      srcDirs = ['src/test/java']
+      destinationDirectory = buildRoot.dir('test-classes')
+    }
+  }
+}
+
+dependencies {
+  constraints {
+    // JUnit 6.x unified Platform/Jupiter/Vintage under one version number - no more Platform-vs-Jupiter
+    // version offset to track, unlike the 5.x line's junit-jupiter 5.x / junit-platform 1.x split
+    api 'org.junit.jupiter:junit-jupiter-api:6.1.3'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:6.1.3'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:6.1.3'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.1.3'
+  }
+  api 'org.junit.jupiter:junit-jupiter-api'
+  testImplementation 'org.junit.jupiter:junit-jupiter-params'
+  testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

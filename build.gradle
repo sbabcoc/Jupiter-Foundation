@@ -1,0 +1,244 @@
+buildscript {
+  repositories {
+    mavenCentral()
+  }
+  dependencies {
+    classpath 'org.sonatype.plexus:plexus-sec-dispatcher:1.4'
+    classpath 'org.codehaus.plexus:plexus-container-default:2.1.1'
+    classpath 'org.sonatype.plexus:plexus-cipher:1.7'
+  }
+}
+
+import org.apache.tools.ant.filters.ReplaceTokens
+import groovy.xml.XmlParser
+import org.sonatype.plexus.components.sec.dispatcher.DefaultSecDispatcher
+import org.sonatype.plexus.components.cipher.DefaultPlexusCipher
+
+plugins {
+  id 'java-library'
+  id 'maven-publish'
+  id 'jacoco'
+  id 'signing'
+  id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
+  id 'pl.allegro.tech.build.axion-release' version '1.21.1'
+}
+
+group = 'com.nordstrom.tools'
+description = 'Jupiter Foundation'
+
+// NOTE: JUnit 6.x requires Java 17; JUnit 5.14.x is the maintained LTS line for Java 8.
+// 'java8' pins junit-jupiter 5.14.4; 'java17' pins junit-jupiter 6.1.3 - same source, two
+// dependency/toolchain targets, exactly mirroring TestNG-Foundation's java8/java11 split.
+if (!project.hasProperty('profile')) {
+  ext.profile = 'java8'
+} else {
+  assert ['java8', 'java17'].contains(profile)
+}
+
+apply from: "${profile}Deps.gradle"
+
+def javaVersion = 'j' + profile.substring(4)
+def verBits   = scmVersion.version.split('-')
+
+def archiveVer
+if (verBits.length > 1) {
+  archiveVer = verBits[1] == javaVersion
+    ? project.version
+    : "${verBits[0]}-${javaVersion}-${verBits[1]}"
+} else {
+  archiveVer = "${verBits[0]}-${javaVersion}"
+}
+
+project.version = archiveVer
+
+def archiveBase = "${rootProject.name}-${archiveVer}"
+
+java {
+  withJavadocJar()
+  withSourcesJar()
+}
+
+clean {
+  delete 'logs', 'target'
+}
+
+jacoco {
+  toolVersion = '0.8.13'
+  reportsDirectory = layout.buildDirectory.dir('customJacocoReportDir')
+}
+
+jacocoTestReport {
+  reports {
+    xml.required = false
+    csv.required = false
+    html.outputLocation = layout.buildDirectory.dir('jacocoHtml')
+  }
+}
+
+def destPath = "META-INF/maven/${project.group}/${rootProject.name}"
+def timestamp = System.currentTimeMillis().toString()
+def pomTokens = [projectVersion: archiveVer, projectTimestamp: timestamp, javaVersion: javaVersion]
+def propTokens = [projectVersion: archiveVer, projectGroupId: project.group, projectArtifactId: rootProject.name]
+
+jar {
+  group = 'Build'
+  description = "Assembles a jar archive containing the '${profile}' classes, POM and Maven properties."
+
+  from('.') {
+    include 'pom.xml'
+    into destPath
+    filter(ReplaceTokens, tokens: pomTokens)
+  }
+  from('.') {
+    include 'pom.properties'
+    into destPath
+    filter(ReplaceTokens, tokens: propTokens)
+  }
+  archiveFileName = "${archiveBase}.jar"
+  destinationDirectory = libsDir
+}
+
+sourcesJar {
+  group = 'Build'
+  description = "Assembles a jar archive containing the '${profile}' source files."
+
+  from sourceSets.main.allSource
+  archiveFileName = "${archiveBase}-sources.jar"
+  destinationDirectory = libsDir
+}
+
+javadocJar {
+  dependsOn javadoc
+  group = 'Build'
+  description = "Assembles a jar archive containing the '${profile}' JavaDoc files."
+
+  from javadoc.destinationDir
+  archiveFileName = "${archiveBase}-javadoc.jar"
+  destinationDirectory = libsDir
+}
+
+test {
+  useJUnitPlatform()
+  include '**/*Test.class'
+  reports.html.outputLocation = layout.buildDirectory.dir('reports/junit')
+  testLogging.showStandardStreams = true
+}
+
+def getMavenServer(String serverId) {
+  def settingsFile = new File(System.getProperty("user.home"), ".m2/settings.xml")
+  if (!settingsFile.exists()) return null
+
+  def settings = new XmlParser().parse(settingsFile)
+  def server = settings.servers.server.find { it.id.text() == serverId }
+
+  if (server) {
+    def dispatcher = new DefaultSecDispatcher()
+    dispatcher._cipher = new DefaultPlexusCipher()
+
+    def securityFile = new File(System.getProperty("user.home"), ".m2/settings-security.xml")
+    System.setProperty("settings.security", securityFile.absolutePath)
+
+    def decrypt = { String val ->
+      if (val == null) return null
+      return dispatcher._cipher.isEncryptedString(val) ? dispatcher.decrypt(val) : val
+    }
+
+    return [
+      username: server.username?.text(),
+      password: decrypt(server.password?.text()),
+      passphrase: decrypt(server.passphrase?.text())
+    ]
+  }
+
+  return null
+}
+
+publishing {
+  publications {
+    mavenJava(MavenPublication) {
+      from components.java
+      pom {
+        name = 'Jupiter Foundation'
+        groupId = project.group
+        artifactId = rootProject.name
+        version = archiveVer
+        packaging = 'jar'
+        description = 'Jupiter Foundation is a foundation framework for JUnit 5 (Jupiter) automation.'
+        url = 'https://github.com/sbabcoc/Jupiter-Foundation'
+
+        scm {
+          connection = 'scm:git:https://github.com/sbabcoc/Jupiter-Foundation.git'
+          developerConnection = 'scm:git:https://github.com/sbabcoc/Jupiter-Foundation.git'
+          url = 'https://github.com/sbabcoc/Jupiter-Foundation/tree/master'
+          tag = 'HEAD'
+        }
+
+        licenses {
+          license {
+            name = 'The Apache License, Version 2.0'
+            url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+          }
+        }
+
+        developers {
+          developer {
+            id = 'scoba'
+            name = 'Scott Babcock'
+            email = 'scoba@hotmail.com'
+            organization = 'Nordstrom'
+            organizationUrl = 'https://shop.nordstrom.com'
+          }
+        }
+      }
+    }
+  }
+}
+
+signing {
+  if (project.hasProperty('signing.keyId')) {
+    def keyId = project.getProperty('signing.keyId')
+    def gpgNode = getMavenServer(keyId)
+    def secret = gpgNode?.passphrase
+
+    if (secret) {
+      useGpgCmd()
+      project.ext.set("signing.gnupg.passphrase", secret)
+      project.ext.set("signing.gnupg.arguments", "--batch,--pinentry-mode,loopback")
+    }
+  }
+  sign publishing.publications.mavenJava
+}
+
+tasks.register('install') {
+  dependsOn publishToMavenLocal
+  group = publishToMavenLocal.group
+  description = '[alias] ' + publishToMavenLocal.description
+}
+
+nexusPublishing {
+  packageGroup = 'com.nordstrom'
+  repositories {
+    ossrh {
+      def ossrhNode = getMavenServer('ossrh')
+      username = ossrhNode?.username
+      password = ossrhNode?.password
+      nexusUrl.set(uri('https://ossrh-staging-api.central.sonatype.com/service/local/'))
+      snapshotRepositoryUrl.set(uri('https://ossrh-staging-api.central.sonatype.com/content/repositories/snapshots/'))
+      if (project.hasProperty('ossrhStagingProfileId')) {
+        stagingProfileId = ossrhStagingProfileId
+      }
+    }
+  }
+}
+
+repositories {
+  mavenLocal()
+  mavenCentral()
+}
+
+dependencies {
+  constraints {
+    api 'com.nordstrom.tools:java-utils:4.2.0'
+  }
+  api 'com.nordstrom.tools:java-utils'
+}

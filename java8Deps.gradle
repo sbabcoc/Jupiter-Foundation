@@ -1,0 +1,38 @@
+ext.buildRoot = layout.projectDirectory.dir('build-j8')
+ext.libsDir = buildRoot.dir('libs')
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(8)
+  }
+}
+
+sourceSets {
+  main {
+    java {
+      srcDirs = ['src/main/java', 'src/main-j8/java']
+      destinationDirectory = buildRoot.dir('classes')
+    }
+    output.resourcesDir = buildRoot.dir('classes')
+  }
+  test {
+    java {
+      srcDirs = ['src/test/java']
+      destinationDirectory = buildRoot.dir('test-classes')
+    }
+  }
+}
+
+dependencies {
+  constraints {
+    // JUnit 6.x requires Java 17; 5.14.x is the maintained LTS line for Java 8/11
+    api 'org.junit.jupiter:junit-jupiter-api:5.14.4'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.14.4'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.14.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.14.4'
+  }
+  api 'org.junit.jupiter:junit-jupiter-api'
+  testImplementation 'org.junit.jupiter:junit-jupiter-params'
+  testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
