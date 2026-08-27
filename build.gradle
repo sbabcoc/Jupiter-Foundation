@@ -240,7 +240,9 @@ dependencies {
   constraints {
     api 'com.nordstrom.tools:java-utils:4.2.0'
     api 'org.slf4j:slf4j-api:2.0.18'
+    api 'com.nordstrom.tools:settings:4.0.0'
   }
   api 'com.nordstrom.tools:java-utils'
   api 'org.slf4j:slf4j-api'
+  api 'com.nordstrom.tools:settings'
 }
