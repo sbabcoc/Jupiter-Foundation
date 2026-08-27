@@ -23,9 +23,20 @@ import org.junit.jupiter.api.extension.ReflectiveInvocationContext;
  * <p>
  * <b>Registration</b>: this class has no dependency on any Selenium Foundation (or other) base class —
  * register it via JUnit Platform's automatic extension detection
- * ({@code META-INF/services/org.junit.jupiter.api.extension.Extension}, with
- * {@code junit.jupiter.extensions.autodetection.enabled=true}) rather than {@code @RegisterExtension},
- * so it applies uniformly to any project depending on Jupiter Foundation.
+ * ({@code META-INF/services/org.junit.jupiter.api.extension.Extension}) rather than
+ * {@code @RegisterExtension}, so it applies uniformly to any project depending on Jupiter Foundation.
+ * <p>
+ * <b>WARNING - this fails silently if forgotten, not loudly:</b> automatic extension detection is
+ * <b>OFF by default</b> in JUnit Platform. The
+ * {@code META-INF/services/org.junit.jupiter.api.extension.Extension} entry alone does nothing unless
+ * the consuming project ALSO sets {@code junit.jupiter.extensions.autodetection.enabled=true} (in its
+ * own {@code junit-platform.properties}, or as a system property). Forget either piece and
+ * {@code ArgumentsCaptor} simply never runs - no error, no log message - {@link #getArguments} just
+ * returns an empty list every time, exactly as documented for a plain {@code @Test} with no
+ * parameters. Anything consuming that empty list where real arguments were expected (e.g. reflectively
+ * re-invoking a {@code @ParameterizedTest} method during a retry) fails downstream with a confusing
+ * "wrong number of arguments" error that gives no hint the actual cause is a missing configuration
+ * property two files away. Verify both pieces are in place before trusting this class is active.
  */
 public class ArgumentsCaptor implements InvocationInterceptor {
 

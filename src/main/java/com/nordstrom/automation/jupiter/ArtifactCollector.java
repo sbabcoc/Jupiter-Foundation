@@ -1,12 +1,18 @@
 package com.nordstrom.automation.jupiter;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.Method;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Properties;
+import java.util.ServiceLoader;
 
+import org.junit.jupiter.api.extension.Extension;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.TestWatcher;
 
@@ -140,13 +146,99 @@ public class ArtifactCollector<T extends ArtifactType> implements TestWatcher {
      * @return artifact file base name
      */
     private String getArtifactBaseName(final ExtensionContext context) {
-        int hashcode = ArgumentsCaptor.getArguments(context).hashCode();
-        String sanitized = context.getRequiredTestMethod().getName().replaceAll("[\\/:*?\"<>|]", "_");
+        Method method = context.getRequiredTestMethod();
+        List<Object> arguments = ArgumentsCaptor.getArguments(context);
+
+        if (arguments.isEmpty() && (method.getParameterCount() > 0)) {
+            warnIfArgumentsCaptorLikelyInactive();
+        }
+
+        int hashcode = arguments.hashCode();
+        String sanitized = method.getName().replaceAll("[\\/:*?\"<>|]", "_");
         if (hashcode != 0) {
             return sanitized + "-" + String.format("%08X", hashcode);
         } else {
             return sanitized;
         }
+    }
+
+    private static volatile boolean argumentsCaptorWarningLogged;
+
+    /**
+     * Diagnose why {@link ArgumentsCaptor} may not be capturing arguments, given that this method's
+     * own parameters imply it should have some. {@code ArgumentsCaptor} can't report its own
+     * inactivity - if either precondition below is missing, none of its code ever runs at all - so
+     * this check lives here instead, in the one place that's guaranteed to run regardless: whatever
+     * actually consumes {@code ArgumentsCaptor}'s (possibly empty) output.
+     * <p>
+     * Logged at most once per JVM - this is a one-time configuration diagnosis, not a per-test warning.
+     */
+    private void warnIfArgumentsCaptorLikelyInactive() {
+        if (argumentsCaptorWarningLogged || (provider.getLogger() == null)) {
+            return;
+        }
+        argumentsCaptorWarningLogged = true;
+
+        boolean spiEntryPresent = false;
+        for (Extension extension
+                : ServiceLoader.load(Extension.class)) {
+            if (extension instanceof ArgumentsCaptor) {
+                spiEntryPresent = true;
+                break;
+            }
+        }
+
+        final String key = "junit.jupiter.extensions.autodetection.enabled";
+        String sysPropValue = System.getProperty(key);
+        boolean autodetectionEnabled = "true".equalsIgnoreCase(sysPropValue);
+
+        // evidence gathered for the log message, regardless of outcome - matches SettingsCore's own
+        // approach of showing the actual resolved path/value rather than a bare yes/no
+        String propsFileEvidence;
+
+        if (autodetectionEnabled) {
+            propsFileEvidence = null; // system property alone already settles it; file irrelevant
+        } else {
+            // getResource() here uses the same lookup JUnit Platform's own launcher performs (single
+            // classpath resource, not merged across multiple copies) - in the overwhelming common case
+            // (one flat test classpath, no custom classloader hierarchy) this resolves the identical
+            // file, so reading it here reflects what the platform actually saw
+            URL url = Thread.currentThread().getContextClassLoader()
+                    .getResource("junit-platform.properties");
+            if (url == null) {
+                propsFileEvidence = "no junit-platform.properties found on this classpath";
+            } else {
+                try {
+                    Properties props = new Properties();
+                    try (InputStream in = url.openStream()) {
+                        props.load(in);
+                    }
+                    String fileValue = props.getProperty(key);
+                    autodetectionEnabled = "true".equalsIgnoreCase(fileValue);
+                    propsFileEvidence = (fileValue == null)
+                            ? ("found " + url + ", but it does not define " + key)
+                            : ("found " + url + ", where " + key + "=" + fileValue);
+                } catch (IOException e) {
+                    propsFileEvidence = "found " + url + ", but could not be read (" + e + ")";
+                }
+            }
+        }
+
+        if (!spiEntryPresent) {
+            provider.getLogger().warn("A test method with parameters produced no captured arguments for "
+                    + "artifact naming. ArgumentsCaptor is not listed in this classpath's "
+                    + "META-INF/services/org.junit.jupiter.api.extension.Extension - check that "
+                    + "entry exists and names com.nordstrom.automation.jupiter.ArgumentsCaptor exactly.");
+        } else if (!autodetectionEnabled) {
+            String evidence = (sysPropValue != null)
+                    ? ("system property " + key + "=" + sysPropValue)
+                    : propsFileEvidence;
+            provider.getLogger().warn("A test method with parameters produced no captured arguments for "
+                    + "artifact naming. ArgumentsCaptor is registered via automatic extension "
+                    + "detection, which requires {}=true - here, {}.", key, evidence);
+        }
+        // if both checks pass, ArgumentsCaptor genuinely is active - the empty result reflects
+        // something else, not a registration problem this diagnostic can identify
     }
 
     /**

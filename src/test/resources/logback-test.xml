@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!--
+        NOTE: TestNG Foundation's own logback.xml also references a "TestNG" appender
+        (com.github.sbabcoc.logback.testng.ReporterAppender), which routes log output into TestNG's
+        own Reporter so it's captured per-test in TestNG's result artifacts. There is no JUnit 5
+        equivalent of that bridge - ReporterAppender reflects directly against org.testng.Reporter/
+        ITestResult, neither of which exists on this classpath. Building an equivalent for Jupiter
+        would mean a custom appender writing through ExtensionContext.publishReportEntry(...), which
+        needs a live ExtensionContext for "the currently running test" the way getExtensionContext()
+        provides elsewhere in this project - real, separate work, not something to fake here.
+    -->
+
+    <root level="debug">
+        <appender-ref ref="STDOUT" />
+    </root>
+
+    <!--
+        NOTE: TestNG Foundation's own config also suppresses org.apache/httpclient/org.eclipse.jetty/
+        org.seleniumhq.jetty9 to ERROR - all Selenium Grid/HTTP-client noise from ITS test suite, which
+        actually exercises Grid components. Jupiter Foundation depends on none of that, so those
+        suppressions would be dead configuration for packages not on this classpath at all - omitted
+        rather than carried over unexamined.
+    -->
+</configuration>

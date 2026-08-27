@@ -2,6 +2,7 @@ package com.nordstrom.automation.jupiter;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -18,7 +19,8 @@ import org.slf4j.LoggerFactory;
 import com.nordstrom.common.base.ExceptionUnwrapper;
 
 /**
- * This extension provides automatic retry of failed {@code @Test} method invocations.
+ * This extension provides automatic retry of failed {@code @Test} and {@code @TestTemplate}
+ * (e.g. {@code @ParameterizedTest}, {@code @RepeatedTest}) method invocations.
  * <p>
  * <b>WHY THIS ISN'T JUST "LOOP invocation.proceed()"</b>
  * <p>
@@ -38,9 +40,22 @@ import com.nordstrom.common.base.ExceptionUnwrapper;
  * Because retries beyond the first bypass the interceptor chain, any other registered
  * {@code InvocationInterceptor} (e.g. Selenium Foundation's driver-lifecycle watcher) will <b>not</b>
  * automatically re-wrap those attempts. This class is deliberately built to be extended - override
- * {@link #beforeAttempt(Object, Method)}/{@link #afterAttempt(Object, Method, Throwable)} to run whatever a subclass
- * needs around every attempt, matching the extension pattern already documented by TestNG Foundation's
- * own {@code RetryManager}: subclass, override, and register your subclass instead of this base class.
+ * {@link #beforeAttempt(Object, Method)}/{@link #afterAttempt(Object, Method, Throwable)} to run
+ * whatever a subclass needs around every attempt, matching the extension pattern already documented by
+ * TestNG Foundation's own {@code RetryManager}: subclass, override, and register your subclass instead
+ * of this base class.
+ * <p>
+ * <b>PARAMETERIZED/REPEATED TESTS</b>
+ * <p>
+ * Plain {@code @Test} methods never carry real invocation parameters in Jupiter - only
+ * {@code @TestTemplate}-based methods (e.g. {@code @ParameterizedTest}) do, via
+ * {@code invocationContext.getArguments()} - available directly since {@code RetryExtension} is
+ * itself an {@code InvocationInterceptor}, unlike {@code ArtifactCollector}'s
+ * {@code TestWatcher.testFailed(...)}, which has no such context and genuinely needs
+ * {@link ArgumentsCaptor}'s {@code Store}-based hand-off instead. Retrying such a method re-invokes it
+ * with the
+ * same resolved argument values captured for the original (failed) invocation - not a fresh set from
+ * whatever {@code @ArgumentsSource} produced them.
  * <p>
  * <b>CONFIGURATION</b>
  * <p>
@@ -55,20 +70,45 @@ import com.nordstrom.common.base.ExceptionUnwrapper;
  * <p>
  * Retry can be disabled per-method or per-class via {@link NoRetry}. Beyond the basic
  * exception-was-thrown check, scenario-specific veto/approval is delegated to any
- * {@link JupiterRetryAnalyzer} instances registered via {@link ServiceLoader}.
+ * {@link JupiterRetryAnalyzer} instances registered via {@link ServiceLoader}. Sensitive parameter
+ * values can be redacted from retry log messages via {@link RedactValue}.
  *
  * @see JupiterRetryAnalyzer
  * @see NoRetry
+ * @see RedactValue
  */
 public class RetryExtension implements InvocationInterceptor {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RetryExtension.class);
+    private static final Object[] NO_ARGS = new Object[0];
 
     /**
      * {@inheritDoc}
      */
     @Override
     public void interceptTestMethod(final Invocation<Void> invocation,
+            final ReflectiveInvocationContext<Method> invocationContext,
+            final ExtensionContext extensionContext) throws Throwable {
+        intercept(invocation, invocationContext, extensionContext);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Covers {@code @ParameterizedTest}, {@code @RepeatedTest}, and any other {@code @TestTemplate}
+     * method - the only category of test with real invocation parameters to log or redact.
+     */
+    @Override
+    public void interceptTestTemplateMethod(final Invocation<Void> invocation,
+            final ReflectiveInvocationContext<Method> invocationContext,
+            final ExtensionContext extensionContext) throws Throwable {
+        intercept(invocation, invocationContext, extensionContext);
+    }
+
+    /**
+     * Shared logic for both {@code @Test} and {@code @TestTemplate} methods.
+     */
+    private void intercept(final Invocation<Void> invocation,
             final ReflectiveInvocationContext<Method> invocationContext,
             final ExtensionContext extensionContext) throws Throwable {
 
@@ -85,11 +125,17 @@ public class RetryExtension implements InvocationInterceptor {
             if (!isRetriable(testMethod, thrown, maxRetry)) {
                 throw t;
             }
-            logRetry(testMethod, thrown);
+
+            // available directly from invocationContext - no need for ArgumentsCaptor's Store-based
+            // hand-off here, unlike ArtifactCollector's TestWatcher.testFailed(...), which has no
+            // ReflectiveInvocationContext of its own and genuinely needs that indirection. Empty for a
+            // plain @Test method (no parameters); populated for @TestTemplate methods.
+            List<Object> arguments = invocationContext.getArguments();
+            logRetry(testMethod, arguments, thrown);
 
             // every attempt from here on is manual reflection - proceed()/skip() must never be called
             // again; the contract is satisfied by the single proceed() call above, regardless of outcome
-            Throwable lastThrown = retryLoop(extensionContext, testMethod, thrown, maxRetry);
+            Throwable lastThrown = retryLoop(extensionContext, testMethod, arguments, maxRetry);
             if (lastThrown != null) {
                 throw lastThrown;
             }
@@ -101,33 +147,34 @@ public class RetryExtension implements InvocationInterceptor {
      *
      * @param extensionContext current extension context
      * @param testMethod failed test method
-     * @param firstFailure exception from the already-consumed first attempt
+     * @param arguments resolved argument values for this invocation (empty for a plain {@code @Test})
      * @param maxRetry maximum number of retry attempts
      * @return exception from the final attempt; {@code null} if a retry attempt passed
      * @throws Throwable if instance/method access fails outside the retried invocation itself
      */
     private Throwable retryLoop(final ExtensionContext extensionContext, final Method testMethod,
-            final Throwable firstFailure, final int maxRetry) throws Throwable {
+            final List<Object> arguments, final int maxRetry) throws Throwable {
 
         Object instance = extensionContext.getRequiredTestInstance();
         Class<?> declaringClass = testMethod.getDeclaringClass();
         List<Method> beforeEachMethods = findLifecycleMethods(declaringClass, BeforeEach.class, true);
         List<Method> afterEachMethods = findLifecycleMethods(declaringClass, AfterEach.class, false);
+        Object[] args = arguments.toArray();
 
-        Throwable lastThrown = firstFailure;
+        Throwable lastThrown = null;
 
         // attempt 1 was the initial proceed() call already consumed above; this loop covers 2..maxRetry+1
         for (int attempt = 2; attempt <= maxRetry + 1; attempt++) {
             lastThrown = null;
             beforeAttempt(instance, testMethod);
             try {
-                invokeAll(beforeEachMethods, instance);
-                invokeMethod(testMethod, instance);
+                invokeAll(beforeEachMethods, instance, NO_ARGS);
+                invokeMethod(testMethod, instance, args);
             } catch (Throwable t) {
                 lastThrown = ExceptionUnwrapper.unwrap(t);
             } finally {
                 try {
-                    invokeAll(afterEachMethods, instance);
+                    invokeAll(afterEachMethods, instance, NO_ARGS);
                 } catch (Throwable t) {
                     if (lastThrown == null) {
                         lastThrown = ExceptionUnwrapper.unwrap(t);
@@ -142,7 +189,7 @@ public class RetryExtension implements InvocationInterceptor {
             }
 
             if ((attempt <= maxRetry) && isRetriable(testMethod, lastThrown, maxRetry)) {
-                logRetry(testMethod, lastThrown);
+                logRetry(testMethod, arguments, lastThrown);
             } else {
                 break;
             }
@@ -169,7 +216,7 @@ public class RetryExtension implements InvocationInterceptor {
 
     /**
      * Hook invoked after every retry attempt beyond the first, whether it passed or failed. See
-     * {@link #beforeAttempt(Object)}.
+     * {@link #beforeAttempt(Object, Method)}.
      * <p>
      * Default implementation does nothing.
      *
@@ -186,9 +233,6 @@ public class RetryExtension implements InvocationInterceptor {
      * <p>
      * <b>NOTE</b>: If the specified method or its declaring class are marked with {@link NoRetry}, this
      * method returns zero.
-     * <p>
-     * Default implementation reads the {@code jupiter.max.retry} system property; override to source
-     * this from a different configuration mechanism.
      *
      * @param context current extension context
      * @param method test method for which retry is being considered
@@ -227,14 +271,62 @@ public class RetryExtension implements InvocationInterceptor {
         return false;
     }
 
-    private void logRetry(final Method method, final Throwable thrown) {
+    private void logRetry(final Method method, final List<Object> arguments, final Throwable thrown) {
         boolean showDetail = LOGGER.isDebugEnabled()
                 || JupiterConfig.getConfig().getBoolean(JupiterConfig.JupiterSettings.RETRY_MORE_INFO.key());
+        String invocation = formatInvocation(method, arguments);
         if (showDetail) {
-            LOGGER.warn("### RETRY ### {}", method, thrown);
+            LOGGER.warn("### RETRY ### {}", invocation, thrown);
         } else {
-            LOGGER.warn("### RETRY ### {}", method);
+            LOGGER.warn("### RETRY ### {}", invocation);
         }
+    }
+
+    /**
+     * Format a method invocation as {@code className.methodName(parmValue...)}, redacting any
+     * parameter marked with {@link RedactValue} - matching TestNG Foundation's own
+     * {@code InvocationRecord.toString()} format and placeholder convention exactly.
+     * <p>
+     * Package-private (not {@code private}) specifically so tests in this package can verify
+     * redaction behavior directly, rather than only indirectly through captured log output.
+     *
+     * @param method invoked method
+     * @param arguments resolved argument values, in declared-parameter order
+     * @return formatted invocation string
+     */
+    String formatInvocation(final Method method, final List<Object> arguments) {
+        StringBuilder builder = new StringBuilder(getQualifiedName(method)).append('(');
+
+        if (!arguments.isEmpty()) {
+            Parameter[] params = method.getParameters();
+            for (int i = 0; i < arguments.size(); i++) {
+                if (i > 0) {
+                    builder.append(", ");
+                }
+                if ((i < params.length) && params[i].isAnnotationPresent(RedactValue.class)) {
+                    builder.append("|:arg").append(i).append(":|");
+                } else {
+                    builder.append(arguments.get(i));
+                }
+            }
+        }
+
+        return builder.append(')').toString();
+    }
+
+    /**
+     * Get {@code className.methodName} for the specified method - matches
+     * {@code InvocationRecord.getQualifiedName} exactly.
+     *
+     * @param method method object
+     * @return qualified name string for the specified method object
+     */
+    private static String getQualifiedName(final Method method) {
+        String methodSig = method.toString();
+        int endIndex = methodSig.lastIndexOf('(');
+        int midIndex = methodSig.lastIndexOf('.', endIndex - 1);
+        int beginIndex = methodSig.lastIndexOf('.', midIndex - 1) + 1;
+        return methodSig.substring(beginIndex, endIndex);
     }
 
     /**
@@ -272,15 +364,17 @@ public class RetryExtension implements InvocationInterceptor {
         return methods;
     }
 
-    private void invokeAll(final List<Method> methods, final Object instance) throws Throwable {
+    private void invokeAll(final List<Method> methods, final Object instance, final Object[] args)
+            throws Throwable {
         for (Method m : methods) {
-            invokeMethod(m, instance);
+            invokeMethod(m, instance, args);
         }
     }
 
-    private void invokeMethod(final Method method, final Object instance) throws Throwable {
+    private void invokeMethod(final Method method, final Object instance, final Object[] args)
+            throws Throwable {
         try {
-            method.invoke(instance);
+            method.invoke(instance, args);
         } catch (InvocationTargetException e) {
             throw e.getTargetException();
         }
