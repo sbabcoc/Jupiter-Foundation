@@ -40,10 +40,8 @@ which mirrors **TestNG-Foundation**'s own `java8`/`java11` profile split.
 ## Dependency Coordinates
 
 ```groovy
-implementation 'com.nordstrom.tools:jupiter-foundation:1.0.0-SNAPSHOT'
+implementation 'com.nordstrom.tools:jupiter-foundation:1.0.0'
 ```
-
-*(Will become `1.0.0` at first stable release.)*
 
 ## Automatic Retry of Failed Tests
 
