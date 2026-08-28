@@ -22,6 +22,17 @@
     </root>
 
     <!--
+        Keeps everything else at DEBUG (JupiterConfig's own diagnostic messages, etc.) while dropping
+        RetryExtension's own logger below DEBUG - this is what actually controls stack-trace verbosity
+        per retry, via RetryExtension.logRetry()'s "LOGGER.isDebugEnabled() || RETRY_MORE_INFO" check.
+        At INFO, isDebugEnabled() is false, so each retry logs its compact one-line form
+        ("### RETRY ### ClassName.methodName(...)") with no stack trace attached, unless
+        jupiter.retry.more.info=true is explicitly set (system property or jupiter.properties) to opt
+        back into full detail on a per-run basis without touching this file again.
+    -->
+    <logger name="com.nordstrom.automation.jupiter.RetryExtension" level="info" />
+
+    <!--
         NOTE: TestNG Foundation's own config also suppresses org.apache/httpclient/org.eclipse.jetty/
         org.seleniumhq.jetty9 to ERROR - all Selenium Grid/HTTP-client noise from ITS test suite, which
         actually exercises Grid components. Jupiter Foundation depends on none of that, so those
