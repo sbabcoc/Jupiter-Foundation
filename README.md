@@ -17,9 +17,6 @@ already provide first-class hooks for everything those two projects had to build
 the `Invocation.proceed()`/`skip()` contract (callable exactly once per interceptor invocation) rules out
 simply looping the normal execution path.
 
-**Status**: early-stage, under active development. Not yet published to Maven Central. Current version is
-`1.0.0-SNAPSHOT`; the first stable release will be **1.0.0**.
-
 ## Requirements
 
 **Jupiter Foundation** targets **Java 8**, but ships two build profiles rather than one, because its two
