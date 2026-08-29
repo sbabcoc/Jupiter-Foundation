@@ -232,6 +232,40 @@ requirement entirely for retry's own purposes. The requirement above applies spe
 `ArtifactCollector`'s parameter-hash artifact naming (and any other extension that isn't itself wrapping
 the invocation and therefore needs `ArgumentsCaptor`'s `Store`-based hand-off instead).
 
+## Migrating from JUnit Foundation
+
+For readers coming from **JUnit Foundation**'s JUnit 4 world: not every feature carried over as a direct
+equivalent. Two worth calling out specifically.
+
+### Timeout Management
+
+**JUnit Foundation** implements test method timeout management itself, since JUnit 4 has no native
+support for it. **Jupiter Foundation does not** — JUnit 5's own extension model already provides this,
+with a more granular configuration hierarchy than JUnit Foundation had to build for itself:
+
+```properties
+junit.jupiter.execution.timeout.default = 30 s
+```
+
+Add this to `junit-platform.properties` (or set it as a system property) for a suite-wide default with no
+per-method annotation required — see JUnit's own [Timeouts documentation](https://docs.junit.org/6.1.0/writing-tests/timeouts.html)
+for the full set of configuration keys (per-lifecycle-phase defaults, thread-mode control, etc.) and the
+declarative `@Timeout` annotation for per-method/per-class overrides. This applies identically on either
+build profile — declarative timeouts have been part of Jupiter since 5.5, well before the `java8`
+profile's 5.14.x floor.
+
+### Artifact Capture
+
+`ArtifactCollector`/`ArtifactType` **do** carry over as direct equivalents — see
+[Artifact Capture](#artifact-capture) above for full usage. The main differences from JUnit Foundation's
+versions:
+
+- No `WATCHER_MAP`/`getWatcher(...)` lookup mechanism — a `@RegisterExtension` field is already a direct
+  object reference, so nothing needs a side-channel lookup to find it.
+- [`ArgumentsCaptor`](#captured-invocation-arguments) replaces `ArtifactParams` for parameter-hash
+  artifact naming — one implementation instead of a separate reflective extractor per JUnit 4
+  parameterized-test runner.
+
 ## Building and Testing
 
 ```
