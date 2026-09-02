@@ -2,7 +2,7 @@
 
 # INTRODUCTION
 
-**Jupiter Foundation** is a lightweight collection of JUnit 5 (Jupiter) extensions, interfaces, and static
+**Jupiter Foundation** is a lightweight collection of JUnit Jupiter extensions, interfaces, and static
 utility classes that supplement and augment the functionality provided by the Jupiter API. The facilities
 provided by **Jupiter Foundation** include automatic retry of failed tests, test artifact capture, and
 resolved-argument capture for `@TestTemplate` methods (e.g. `@ParameterizedTest`, `@RepeatedTest`).
